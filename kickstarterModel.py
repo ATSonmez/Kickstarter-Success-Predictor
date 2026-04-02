@@ -20,7 +20,7 @@ from sklearn.metrics import (
 
 # ── 1. Load & Clean Data ─────────────────────────────────────────────────────
 
-df = pd.read_csv(r"C:\Users\popul\Desktop\All Projects\Startup-analysis project\kickstarter_data_with_features.csv")
+df = pd.read_csv("kickstarter_data_with_features.csv")
 
 print(f"Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
 
@@ -125,7 +125,7 @@ num_features = X_train.shape[1]
 model = KickstarterNet(num_features)
 print(model)
 
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 loss_fn = nn.BCELoss()
 
 # ── 6. Training ───────────────────────────────────────────────────────────────
