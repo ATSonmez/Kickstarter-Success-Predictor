@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version with only Step 1 (Adam optimizer) and Step 2 (Validation split + Early stopping)
+# No BatchNorm, no class imbalance weighting
 
 import pandas as pd
 import numpy as np
@@ -85,7 +87,7 @@ plt.show()
 leakage_cols = ['pledged', 'usd_pledged', 'backers_count', 'spotlight']
 df.drop(columns=leakage_cols, inplace=True)
 
-# ── 4. Train/Test Split ──────────────────────────────────────────────────────
+# ── 4. Train/Test/Val Split (Step 2) ────────────────────────────────────────
 
 X = df.drop(columns='succeeded').values.astype(np.float32)
 y = df['succeeded'].values.astype(np.float32)
@@ -102,27 +104,25 @@ y_val_t = torch.tensor(y_val).unsqueeze(1)
 X_test_t = torch.tensor(X_test)
 y_test_t = torch.tensor(y_test).unsqueeze(1)
 
-train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=128, shuffle=True)
+train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=64, shuffle=True)
 
-# ── 5. Model Definition ──────────────────────────────────────────────────────
+# ── 5. Model Definition (Original architecture, no BatchNorm) ───────────────
 
 class KickstarterNet(nn.Module):
     def __init__(self, num_features):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(num_features, 64),
-            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, 32),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(64, 32),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.Dropout(0.2),
             nn.Linear(32, 16),
-            nn.BatchNorm1d(16),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(16, 1)  # No sigmoid — BCEWithLogitsLoss applies it internally
+            nn.Linear(16, 1),
+            nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -132,21 +132,14 @@ num_features = X_train.shape[1]
 model = KickstarterNet(num_features)
 print(model)
 
+# Step 1: Adam optimizer instead of SGD
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+loss_fn = nn.BCELoss()
 
-# Class imbalance weighting
-num_negative = (y_train == 0).sum()
-num_positive = (y_train == 1).sum()
-pos_weight = torch.tensor([num_negative / num_positive])
-print(f"Class distribution — Negative: {num_negative}, Positive: {num_positive}, pos_weight: {pos_weight.item():.2f}")
-
-loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-# ── 6. Training ───────────────────────────────────────────────────────────────
+# ── 6. Training with Early Stopping (Step 2) ────────────────────────────────
 
 NUM_EPOCHS = 500
-PATIENCE = 25  # Stop if val loss doesn't improve for this many epochs
+PATIENCE = 15
 
 train_acc_history = []
 train_loss_history = []
@@ -174,7 +167,7 @@ for epoch in range(NUM_EPOCHS):
         optimizer.step()
 
         epoch_loss += loss.item() * X_batch.size(0)
-        preds = (torch.sigmoid(output) > 0.5).float()
+        preds = (output > 0.5).float()
         correct += (preds == y_batch).sum().item()
         total += y_batch.size(0)
 
@@ -188,14 +181,11 @@ for epoch in range(NUM_EPOCHS):
     with torch.no_grad():
         val_output = model(X_val_t)
         v_loss = loss_fn(val_output, y_val_t).item()
-        val_preds = (torch.sigmoid(val_output) > 0.5).float()
+        val_preds = (val_output > 0.5).float()
         v_acc = (val_preds == y_val_t).float().mean().item()
 
     val_loss_history.append(v_loss)
     val_acc_history.append(v_acc)
-
-    # ── Reduce LR if val loss plateaus ──
-    scheduler.step(v_loss)
 
     # ── Early stopping check ──
     if v_loss < best_val_loss:
@@ -224,9 +214,8 @@ print(f'Training complete in {elapsed:.2f}s', flush=True)
 
 model.eval()
 with torch.no_grad():
-    y_pred_logits = model(X_test_t)
-    test_loss = loss_fn(y_pred_logits, y_test_t).item()
-    y_pred_prob = torch.sigmoid(y_pred_logits).numpy()
+    y_pred_prob = model(X_test_t).numpy()
+    test_loss = loss_fn(torch.tensor(y_pred_prob), y_test_t).item()
 
 y_pred = (y_pred_prob > 0.5).astype(int).flatten()
 test_acc = (y_pred == y_test).mean()
