@@ -10,10 +10,10 @@ __pycache__/
 *.pkl
 *.pt
 
-# Environment
-.env
-.env.local
-.env.production
+# Environment — block .env files everywhere in the project
+**/.env
+**/.env.local
+**/.env.production
 
 # Node
 node_modules/
@@ -23,3 +23,9 @@ build/
 # IDE
 .vscode/
 .idea/
+
+# Docker
+postgres_data/
+
+# Virtual environment
+venv/
