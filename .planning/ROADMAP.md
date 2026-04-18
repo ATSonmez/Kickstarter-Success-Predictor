@@ -29,7 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. All three training scripts (`kickstarterModel.py`, `kickstarterModel_testing.py`, `hyperparameter_search.py`) import from `backend/services/preprocessing.py` — no duplicated preprocessing code remains in those files
   4. `*.pt`, `*.pkl`, and `backend/models/*.json` are gitignored; only `.gitkeep` (or nothing) is tracked under `backend/models/`
   5. `LAUNCH_TIME_FEATURES` vs `POST_CAMPAIGN_FEATURES` are explicitly documented in the preprocessing module
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Wave 0 test scaffolding (pytest config, failing stubs for FND-01..FND-06)
+- [ ] 01-02-PLAN.md — KickstarterPreprocessor module + nn_model extraction + gitignore/gitkeep (FND-01, FND-02, FND-03, FND-06)
+- [ ] 01-03-PLAN.md — Refactor 3 training scripts + artifact saving + end-to-end training run (FND-04, FND-05)
 
 ### Phase 2: Core Predict Loop
 **Goal**: Users can open the Predict page, fill in a campaign form, submit it, and see a success probability with plain-English SHAP explanations — the first demoable milestone
@@ -78,7 +82,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/TBD | Not started | - |
+| 1. Foundation | 0/3 | Not started | - |
 | 2. Core Predict Loop | 0/TBD | Not started | - |
 | 3. Supporting Pages | 0/TBD | Not started | - |
 | 4. Integration and Polish | 0/TBD | Not started | - |
