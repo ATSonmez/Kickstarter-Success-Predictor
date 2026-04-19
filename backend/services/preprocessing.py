@@ -29,9 +29,8 @@ POST_CAMPAIGN_FEATURES: list[str] = [
     "backers_count", "pledged", "usd_pledged", "spotlight",
 ]
 
-# Dropped entirely (Claude's Discretion decision, locked in CONTEXT.md):
-# static_usd_rate may be a post-campaign exchange rate and cannot be
-# supplied by the user at form time. If the model ever needs it,
+# Dropped entirely: static_usd_rate may be a post-campaign exchange rate
+# and cannot be supplied by the user at form time. If the model ever needs it,
 # hardcode 1.0 in transform_single and document here.
 AMBIGUOUS_DROP: list[str] = ["static_usd_rate"]
 

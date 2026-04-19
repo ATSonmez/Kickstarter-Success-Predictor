@@ -34,3 +34,7 @@ venv/
 # *.pkl and *.pt already covered globally above; JSON needs explicit rule.
 backend/models/*.json
 !backend/models/.gitkeep
+
+# Dev tooling — not part of the public codebase
+.planning/
+.claude/
