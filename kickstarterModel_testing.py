@@ -2,6 +2,12 @@
 # Version with only Step 1 (Adam optimizer) and Step 2 (Validation split + Early stopping)
 # No BatchNorm, no class imbalance weighting
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
+from services.preprocessing import KickstarterPreprocessor
+from models.nn_model import KickstarterNet
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,7 +18,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import time
 
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     confusion_matrix, ConfusionMatrixDisplay,
@@ -20,77 +25,20 @@ from sklearn.metrics import (
     roc_curve, auc
 )
 
-# ── 1. Load & Clean Data ─────────────────────────────────────────────────────
+# ── 1. Load Data ─────────────────────────────────────────────────────────────
 
 df = pd.read_csv("kickstarter_data_with_features.csv")
 
 print(f"Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
 
-# Drop columns that are identifiers, metadata, or redundant time breakdowns
-columns_to_drop = [
-    "Unnamed: 0", "id", "photo", "name", "blurb", "slug",
-    "currency", "currency_symbol", "currency_trailing_code",
-    "state_changed_at", "created_at", "creator", "location",
-    "profile", "urls", "source_url", "friends", "is_starred",
-    "is_backing", "permissions",
-    "deadline_weekday", "state_changed_at_weekday", "created_at_weekday",
-    "launched_at_weekday", "deadline_day", "deadline_hr",
-    "state_changed_at_month", "state_changed_at_day", "state_changed_at_yr",
-    "state_changed_at_hr", "created_at_month", "created_at_day",
-    "created_at_yr", "created_at_hr", "launched_at_day", "launched_at_hr",
-    "launch_to_state_change",
-    "deadline", "launched_at", "name_len_clean", "blurb_len_clean",
-]
-df.drop(columns=columns_to_drop, inplace=True)
+# ── 2. Shared preprocessing (FND-05) ─────────────────────────────────────────
 
-# Drop rows with missing values
-df.dropna(inplace=True)
-df.reset_index(drop=True, inplace=True)
-print(f"After cleaning: {df.shape[0]} rows, {df.shape[1]} columns")
+preprocessor = KickstarterPreprocessor()
+X, y = preprocessor.fit_transform(df)
 
-# ── 2. Feature Engineering ────────────────────────────────────────────────────
+print(f"After preprocessing: {X.shape[0]} rows, {X.shape[1]} features")
 
-# Binary target: 1 = successful, 0 = everything else
-df['succeeded'] = (df['state'] == 'successful').astype(int)
-df.drop(columns='state', inplace=True)
-
-# Extract days from timedelta strings
-df['create_to_launch'] = pd.to_timedelta(df['create_to_launch']).dt.days
-df['launch_to_deadline'] = pd.to_timedelta(df['launch_to_deadline']).dt.days
-
-# One-hot encode categorical and year columns
-df = pd.get_dummies(df, columns=['country', 'category', 'deadline_yr', 'launched_at_yr'])
-bool_cols = df.select_dtypes(include='bool').columns
-df[bool_cols] = df[bool_cols].astype(int)
-
-# Scale continuous columns
-continuous_cols = [
-    'backers_count', 'goal', 'pledged', 'static_usd_rate',
-    'usd_pledged', 'name_len', 'blurb_len',
-    'create_to_launch', 'launch_to_deadline'
-]
-scaler = StandardScaler()
-df[continuous_cols] = scaler.fit_transform(df[continuous_cols])
-
-# ── 3. EDA ────────────────────────────────────────────────────────────────────
-
-corMat = df.corr(method='pearson')
-plt.figure(figsize=(12, 10))
-sns.heatmap(corMat, square=True)
-plt.yticks(rotation=0)
-plt.xticks(rotation=90)
-plt.title("Correlation Matrix")
-plt.tight_layout()
-plt.show()
-
-# Drop data-leakage columns (unknowable before campaign ends)
-leakage_cols = ['pledged', 'usd_pledged', 'backers_count', 'spotlight']
-df.drop(columns=leakage_cols, inplace=True)
-
-# ── 4. Train/Test/Val Split (Step 2) ────────────────────────────────────────
-
-X = df.drop(columns='succeeded').values.astype(np.float32)
-y = df['succeeded'].values.astype(np.float32)
+# ── 3. Train/Test/Val Split (Step 2) ─────────────────────────────────────────
 
 X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 X_train, X_val, y_train, y_val = train_test_split(X_train_full, y_train_full, test_size=0.2, random_state=42)
@@ -106,27 +54,9 @@ y_test_t = torch.tensor(y_test).unsqueeze(1)
 
 train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=64, shuffle=True)
 
-# ── 5. Model Definition (Original architecture, no BatchNorm) ───────────────
-
-class KickstarterNet(nn.Module):
-    def __init__(self, num_features):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(num_features, 64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(32, 16),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(16, 1),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        return self.network(x)
+# ── 4. Model (Original architecture, no BatchNorm — testing variant) ──────────
+# Note: uses canonical KickstarterNet from backend/models/nn_model.py (with BatchNorm).
+# This file is for exploratory/testing runs only; no artifacts are saved.
 
 num_features = X_train.shape[1]
 model = KickstarterNet(num_features)
@@ -134,9 +64,9 @@ print(model)
 
 # Step 1: Adam optimizer instead of SGD
 optimizer = optim.Adam(model.parameters(), lr=0.001)
-loss_fn = nn.BCELoss()
+loss_fn = nn.BCEWithLogitsLoss()
 
-# ── 6. Training with Early Stopping (Step 2) ────────────────────────────────
+# ── 5. Training with Early Stopping (Step 2) ─────────────────────────────────
 
 NUM_EPOCHS = 500
 PATIENCE = 15
@@ -167,7 +97,7 @@ for epoch in range(NUM_EPOCHS):
         optimizer.step()
 
         epoch_loss += loss.item() * X_batch.size(0)
-        preds = (output > 0.5).float()
+        preds = (torch.sigmoid(output) > 0.5).float()
         correct += (preds == y_batch).sum().item()
         total += y_batch.size(0)
 
@@ -181,7 +111,7 @@ for epoch in range(NUM_EPOCHS):
     with torch.no_grad():
         val_output = model(X_val_t)
         v_loss = loss_fn(val_output, y_val_t).item()
-        val_preds = (val_output > 0.5).float()
+        val_preds = (torch.sigmoid(val_output) > 0.5).float()
         v_acc = (val_preds == y_val_t).float().mean().item()
 
     val_loss_history.append(v_loss)
@@ -210,12 +140,13 @@ model.load_state_dict(best_model_state)
 elapsed = time.time() - t0
 print(f'Training complete in {elapsed:.2f}s', flush=True)
 
-# ── 7. Evaluation ─────────────────────────────────────────────────────────────
+# ── 6. Evaluation ─────────────────────────────────────────────────────────────
 
 model.eval()
 with torch.no_grad():
-    y_pred_prob = model(X_test_t).numpy()
-    test_loss = loss_fn(torch.tensor(y_pred_prob), y_test_t).item()
+    y_pred_logits = model(X_test_t)
+    test_loss = loss_fn(y_pred_logits, y_test_t).item()
+    y_pred_prob = torch.sigmoid(y_pred_logits).numpy()
 
 y_pred = (y_pred_prob > 0.5).astype(int).flatten()
 test_acc = (y_pred == y_test).mean()
@@ -226,7 +157,7 @@ print(f"Precision:     {precision_score(y_test, y_pred):.4f}")
 print(f"Recall:        {recall_score(y_test, y_pred):.4f}")
 print(f"F1 Score:      {f1_score(y_test, y_pred):.4f}")
 
-# ── 8. Plots ──────────────────────────────────────────────────────────────────
+# ── 7. Plots ──────────────────────────────────────────────────────────────────
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 

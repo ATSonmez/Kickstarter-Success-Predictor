@@ -3,6 +3,11 @@
 # Tests combinations of learning rate, hidden layer sizes, dropout, and batch size
 # Reports the best configuration by F1 score
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
+from services.preprocessing import KickstarterPreprocessor
+
 import pandas as pd
 import numpy as np
 import torch
@@ -12,55 +17,15 @@ from torch.utils.data import DataLoader, TensorDataset
 import time
 from itertools import product
 
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-# ── 1. Data Preparation (same as main model) ─────────────────────────────────
+# ── 1. Data Preparation ───────────────────────────────────────────────────────
 
 df = pd.read_csv("kickstarter_data_with_features.csv")
 
-columns_to_drop = [
-    "Unnamed: 0", "id", "photo", "name", "blurb", "slug",
-    "currency", "currency_symbol", "currency_trailing_code",
-    "state_changed_at", "created_at", "creator", "location",
-    "profile", "urls", "source_url", "friends", "is_starred",
-    "is_backing", "permissions",
-    "deadline_weekday", "state_changed_at_weekday", "created_at_weekday",
-    "launched_at_weekday", "deadline_day", "deadline_hr",
-    "state_changed_at_month", "state_changed_at_day", "state_changed_at_yr",
-    "state_changed_at_hr", "created_at_month", "created_at_day",
-    "created_at_yr", "created_at_hr", "launched_at_day", "launched_at_hr",
-    "launch_to_state_change",
-    "deadline", "launched_at", "name_len_clean", "blurb_len_clean",
-]
-df.drop(columns=columns_to_drop, inplace=True)
-df.dropna(inplace=True)
-df.reset_index(drop=True, inplace=True)
-
-df['succeeded'] = (df['state'] == 'successful').astype(int)
-df.drop(columns='state', inplace=True)
-
-df['create_to_launch'] = pd.to_timedelta(df['create_to_launch']).dt.days
-df['launch_to_deadline'] = pd.to_timedelta(df['launch_to_deadline']).dt.days
-
-df = pd.get_dummies(df, columns=['country', 'category', 'deadline_yr', 'launched_at_yr'])
-bool_cols = df.select_dtypes(include='bool').columns
-df[bool_cols] = df[bool_cols].astype(int)
-
-continuous_cols = [
-    'backers_count', 'goal', 'pledged', 'static_usd_rate',
-    'usd_pledged', 'name_len', 'blurb_len',
-    'create_to_launch', 'launch_to_deadline'
-]
-scaler = StandardScaler()
-df[continuous_cols] = scaler.fit_transform(df[continuous_cols])
-
-leakage_cols = ['pledged', 'usd_pledged', 'backers_count', 'spotlight']
-df.drop(columns=leakage_cols, inplace=True)
-
-X = df.drop(columns='succeeded').values.astype(np.float32)
-y = df['succeeded'].values.astype(np.float32)
+preprocessor = KickstarterPreprocessor()
+X, y = preprocessor.fit_transform(df)
 
 X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 X_train, X_val, y_train, y_val = train_test_split(X_train_full, y_train_full, test_size=0.2, random_state=42)
@@ -78,7 +43,8 @@ pos_weight = torch.tensor([num_negative / num_positive])
 
 num_features = X_train.shape[1]
 
-# ── 2. Model Definition ──────────────────────────────────────────────────────
+# ── 2. Model Definition (parametric variant for search) ───────────────────────
+# Kept local — takes hidden_sizes/dropouts kwargs incompatible with canonical KickstarterNet.
 
 class KickstarterNet(nn.Module):
     def __init__(self, num_features, hidden_sizes, dropouts):
@@ -99,7 +65,7 @@ class KickstarterNet(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-# ── 3. Training Function ─────────────────────────────────────────────────────
+# ── 3. Training Function ──────────────────────────────────────────────────────
 
 def train_and_evaluate(lr, hidden_sizes, dropouts, batch_size):
     train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=batch_size, shuffle=True)
@@ -160,7 +126,7 @@ def train_and_evaluate(lr, hidden_sizes, dropouts, batch_size):
         'best_val_loss': best_val_loss,
     }
 
-# ── 4. Search Space ──────────────────────────────────────────────────────────
+# ── 4. Search Space ───────────────────────────────────────────────────────────
 
 search_space = {
     'lr':           [0.0005, 0.001, 0.005],
@@ -178,7 +144,7 @@ combos = list(product(
 
 print(f"Testing {len(combos)} hyperparameter combinations...\n")
 
-# ── 5. Run Search ────────────────────────────────────────────────────────────
+# ── 5. Run Search ─────────────────────────────────────────────────────────────
 
 results = []
 best_f1 = 0
