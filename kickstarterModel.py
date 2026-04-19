@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
+from services.preprocessing import KickstarterPreprocessor
+from models.nn_model import KickstarterNet
+
+import json
+import joblib
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,7 +19,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import time
 
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     confusion_matrix, ConfusionMatrixDisplay,
@@ -18,77 +26,53 @@ from sklearn.metrics import (
     roc_curve, auc
 )
 
-# ── 1. Load & Clean Data ─────────────────────────────────────────────────────
+MODELS_DIR = Path(__file__).parent / "backend" / "models"
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── 1. Load Data ─────────────────────────────────────────────────────────────
 
 df = pd.read_csv("kickstarter_data_with_features.csv")
 
 print(f"Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
 
-# Drop columns that are identifiers, metadata, or redundant time breakdowns
-columns_to_drop = [
-    "Unnamed: 0", "id", "photo", "name", "blurb", "slug",
-    "currency", "currency_symbol", "currency_trailing_code",
-    "state_changed_at", "created_at", "creator", "location",
-    "profile", "urls", "source_url", "friends", "is_starred",
-    "is_backing", "permissions",
-    "deadline_weekday", "state_changed_at_weekday", "created_at_weekday",
-    "launched_at_weekday", "deadline_day", "deadline_hr",
-    "state_changed_at_month", "state_changed_at_day", "state_changed_at_yr",
-    "state_changed_at_hr", "created_at_month", "created_at_day",
-    "created_at_yr", "created_at_hr", "launched_at_day", "launched_at_hr",
-    "launch_to_state_change",
-    "deadline", "launched_at", "name_len_clean", "blurb_len_clean",
-]
-df.drop(columns=columns_to_drop, inplace=True)
+# ── 2. EDA stats snapshot (computed BEFORE encoding — Pattern 5) ─────────────
 
-# Drop rows with missing values
-df.dropna(inplace=True)
-df.reset_index(drop=True, inplace=True)
-print(f"After cleaning: {df.shape[0]} rows, {df.shape[1]} columns")
+df_clean = df.copy()
+df_clean.dropna(inplace=True)
+df_clean["succeeded"] = (df_clean["state"] == "successful").astype(int)
 
-# ── 2. Feature Engineering ────────────────────────────────────────────────────
+# Goal buckets per D-03 Claude's Discretion
+goal_bins = [0, 1_000, 10_000, 100_000, float("inf")]
+goal_labels = ["<$1k", "$1k-$10k", "$10k-$100k", ">$100k"]
+df_clean["goal_bucket"] = pd.cut(
+    df_clean["goal"], bins=goal_bins, labels=goal_labels, right=False
+)
+eda_stats = {
+    "by_category": (
+        df_clean.groupby("category")["succeeded"]
+        .agg(success_rate="mean", count="count")
+        .reset_index().to_dict(orient="records")
+    ),
+    "by_country": (
+        df_clean.groupby("country")["succeeded"]
+        .agg(success_rate="mean", count="count")
+        .reset_index().to_dict(orient="records")
+    ),
+    "by_goal_bucket": (
+        df_clean.groupby("goal_bucket", observed=True)["succeeded"]
+        .agg(success_rate="mean", count="count")
+        .reset_index().to_dict(orient="records")
+    ),
+}
 
-# Binary target: 1 = successful, 0 = everything else
-df['succeeded'] = (df['state'] == 'successful').astype(int)
-df.drop(columns='state', inplace=True)
+# ── 3. Shared preprocessing (FND-01, FND-02, FND-05) ─────────────────────────
 
-# Extract days from timedelta strings
-df['create_to_launch'] = pd.to_timedelta(df['create_to_launch']).dt.days
-df['launch_to_deadline'] = pd.to_timedelta(df['launch_to_deadline']).dt.days
+preprocessor = KickstarterPreprocessor()
+X, y = preprocessor.fit_transform(df)
 
-# One-hot encode categorical and year columns
-df = pd.get_dummies(df, columns=['country', 'category', 'deadline_yr', 'launched_at_yr'])
-bool_cols = df.select_dtypes(include='bool').columns
-df[bool_cols] = df[bool_cols].astype(int)
-
-# Scale continuous columns
-continuous_cols = [
-    'backers_count', 'goal', 'pledged', 'static_usd_rate',
-    'usd_pledged', 'name_len', 'blurb_len',
-    'create_to_launch', 'launch_to_deadline'
-]
-scaler = StandardScaler()
-df[continuous_cols] = scaler.fit_transform(df[continuous_cols])
-
-# ── 3. EDA ────────────────────────────────────────────────────────────────────
-
-corMat = df.corr(method='pearson')
-plt.figure(figsize=(12, 10))
-sns.heatmap(corMat, square=True)
-plt.yticks(rotation=0)
-plt.xticks(rotation=90)
-plt.title("Correlation Matrix")
-plt.tight_layout()
-plt.show()
-
-# Drop data-leakage columns (unknowable before campaign ends)
-leakage_cols = ['pledged', 'usd_pledged', 'backers_count', 'spotlight']
-df.drop(columns=leakage_cols, inplace=True)
+print(f"After preprocessing: {X.shape[0]} rows, {X.shape[1]} features")
 
 # ── 4. Train/Test Split ──────────────────────────────────────────────────────
-
-X = df.drop(columns='succeeded').values.astype(np.float32)
-y = df['succeeded'].values.astype(np.float32)
 
 X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 X_train, X_val, y_train, y_val = train_test_split(X_train_full, y_train_full, test_size=0.2, random_state=42)
@@ -104,32 +88,9 @@ y_test_t = torch.tensor(y_test).unsqueeze(1)
 
 train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=128, shuffle=True)
 
-# ── 5. Model Definition ──────────────────────────────────────────────────────
+# ── 5. Model ─────────────────────────────────────────────────────────────────
 
-class KickstarterNet(nn.Module):
-    def __init__(self, num_features):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(num_features, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 32),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(32, 16),
-            nn.BatchNorm1d(16),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(16, 1)  # No sigmoid — BCEWithLogitsLoss applies it internally
-        )
-
-    def forward(self, x):
-        return self.network(x)
-
-num_features = X_train.shape[1]
-model = KickstarterNet(num_features)
+model = KickstarterNet(num_features=X_train.shape[1])
 print(model)
 
 optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -283,3 +244,41 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+# ── 9. Save all 6 artifacts (FND-04) ─────────────────────────────────────────
+
+# 1. Neural net state_dict
+torch.save(model.state_dict(), MODELS_DIR / "kickstarter_nn.pt")
+
+# 2. Scaler + feature columns (via preprocessor.save)
+preprocessor.save(MODELS_DIR)
+
+# 3. Balanced SHAP background sample — 100 rows (50 success + 50 failure)
+rng = np.random.default_rng(42)
+y_train_arr = y_train if isinstance(y_train, np.ndarray) else y_train.numpy()
+X_train_arr = X_train if isinstance(X_train, np.ndarray) else X_train.numpy()
+success_idx = np.where(y_train_arr == 1)[0]
+failure_idx = np.where(y_train_arr == 0)[0]
+bg_idx = np.concatenate([
+    rng.choice(success_idx, 50, replace=False),
+    rng.choice(failure_idx, 50, replace=False),
+])
+background_tensor = torch.tensor(X_train_arr[bg_idx], dtype=torch.float32)
+torch.save(background_tensor, MODELS_DIR / "background.pt")
+
+# 4. EDA stats
+with open(MODELS_DIR / "eda_stats.json", "w") as f:
+    json.dump(eda_stats, f, indent=2, default=str)
+
+# 5. Model metadata
+metadata = {
+    "trained_at": pd.Timestamp.now().isoformat(),
+    "accuracy": float(test_acc),
+    "auc": float(roc_auc),
+    "num_features": int(X_train.shape[1]),
+    "feature_columns": preprocessor.feature_columns,
+}
+with open(MODELS_DIR / "model_metadata.json", "w") as f:
+    json.dump(metadata, f, indent=2)
+
+print(f"Saved 6 artifacts to {MODELS_DIR}")
