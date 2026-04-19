@@ -29,3 +29,8 @@ postgres_data/
 
 # Virtual environment
 venv/
+
+# Model artifacts — JSON outputs (FND-06)
+# *.pkl and *.pt already covered globally above; JSON needs explicit rule.
+backend/models/*.json
+!backend/models/.gitkeep
