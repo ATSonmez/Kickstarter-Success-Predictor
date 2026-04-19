@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. `LAUNCH_TIME_FEATURES` vs `POST_CAMPAIGN_FEATURES` are explicitly documented in the preprocessing module
 **Plans**: 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — Wave 0 test scaffolding (pytest config, failing stubs for FND-01..FND-06)
-- [ ] 01-02-PLAN.md — KickstarterPreprocessor module + nn_model extraction + gitignore/gitkeep (FND-01, FND-02, FND-03, FND-06)
-- [ ] 01-03-PLAN.md — Refactor 3 training scripts + artifact saving + end-to-end training run (FND-04, FND-05)
+- [x] 01-01-PLAN.md — Wave 0 test scaffolding (pytest config, failing stubs for FND-01..FND-06)
+- [x] 01-02-PLAN.md — KickstarterPreprocessor module + nn_model extraction + gitignore/gitkeep (FND-01, FND-02, FND-03, FND-06)
+- [x] 01-03-PLAN.md — Refactor 3 training scripts + artifact saving + end-to-end training run (FND-04, FND-05)
 
 ### Phase 2: Core Predict Loop
 **Goal**: Users can open the Predict page, fill in a campaign form, submit it, and see a success probability with plain-English SHAP explanations — the first demoable milestone
